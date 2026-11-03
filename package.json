@@ -1,0 +1,24 @@
+{
+  "name": "omnitrans",
+  "version": "1.0.0",
+  "description": "Offline Multimodal Translation PWA powered by LiteRT-LM & Gemma 4 E2B",
+  "type": "module",
+  "author": "dev-ansung",
+  "license": "Apache-2.0",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit",
+    "test": "node --experimental-strip-types --test tests/*.test.ts"
+  },
+  "dependencies": {
+    "@litert-lm/core": "^0.19.0",
+    "lucide": "^0.471.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.1",
+    "typescript": "^5.7.2",
+    "vite": "^6.0.3"
+  }
+}

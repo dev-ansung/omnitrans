@@ -2,8 +2,9 @@ import { createIcons, icons } from 'lucide';
 import { LANGUAGES, getLanguageByCode } from './constants/languages.js';
 import { getDictionary } from './i18n/index.js';
 import { HistoryStore } from './stores/history_store.js';
-import { ModelStore } from './stores/model_store.js';
+import { ModelStore, type MediaInput } from './stores/model_store.js';
 import { SettingsStore } from './stores/settings_store.js';
+import { toSupportedImage, toWav } from './utils/media.js';
 import { TtsService } from './services/tts_service.js';
 import { buildTranslationPrompt } from './utils/prompt_builder.js';
 import type { TranslationRecord } from './types/index.js';
@@ -14,10 +15,13 @@ const modelStore = new ModelStore();
 const ttsService = new TtsService();
 
 const toastContainer = document.getElementById('toastContainer')!;
-let activeAttachment: { type: 'image' | 'audio'; dataUrl: string; name: string } | null = null;
+let activeAttachment: { type: 'image' | 'audio'; dataUrl: string; name: string; blob: Blob } | null = null;
 let mediaRecorder: MediaRecorder | null = null;
 let audioChunks: Blob[] = [];
 let isRecording = false;
+let currentAudioStream: MediaStream | null = null;
+let recordingTimerInterval: number | null = null;
+let recordingSeconds = 0;
 
 let cameraStream: MediaStream | null = null;
 let facingMode: 'user' | 'environment' = 'environment';
@@ -47,6 +51,10 @@ const btnFlipCamera = document.getElementById('btnFlipCamera')!;
 const cameraGalleryInput = document.getElementById('cameraGalleryInput') as HTMLInputElement;
 
 const btnMicRecord = document.getElementById('btnMicRecord')!;
+const recordingBar = document.getElementById('recordingBar')!;
+const recordingTimer = document.getElementById('recordingTimer')!;
+const btnStopRecording = document.getElementById('btnStopRecording')!;
+const btnCancelRecording = document.getElementById('btnCancelRecording')!;
 const btnPlaySourceTts = document.getElementById('btnPlaySourceTts')!;
 const btnTranslate = document.getElementById('btnTranslate')!;
 const mediaAttachmentPreview = document.getElementById('mediaAttachmentPreview')!;
@@ -54,6 +62,7 @@ const mediaAttachmentContent = document.getElementById('mediaAttachmentContent')
 const btnRemoveAttachment = document.getElementById('btnRemoveAttachment')!;
 
 const outputTranslatedText = document.getElementById('outputTranslatedText')!;
+const inferenceIndicator = document.getElementById('inferenceIndicator')!;
 const btnPlayTargetTts = document.getElementById('btnPlayTargetTts')!;
 const btnCopyTranslation = document.getElementById('btnCopyTranslation')!;
 
@@ -78,6 +87,7 @@ const btnRequestPersist = document.getElementById('btnRequestPersist')!;
 const inputSystemPrompt = document.getElementById('inputSystemPrompt') as HTMLTextAreaElement;
 const btnSaveSystemPrompt = document.getElementById('btnSaveSystemPrompt')!;
 const textTtsReady = document.getElementById('textTtsReady')!;
+const labelAppVersion = document.getElementById('labelAppVersion')!;
 
 export function showToast(message: string, durationMs = 2800): void {
   const toast = document.createElement('div');
@@ -224,13 +234,21 @@ selectTargetLang.addEventListener('change', () => {
 });
 
 // Camera & Image Attachment
+function dataUrlToBlob(dataUrl: string): Blob {
+  const [header, b64] = dataUrl.split(',');
+  const mime = header!.match(/:(.*?);/)![1]!;
+  const bytes = Uint8Array.from(atob(b64!), (c) => c.charCodeAt(0));
+  return new Blob([bytes], { type: mime });
+}
+
 function handleImageFile(file: File): void {
   const reader = new FileReader();
   reader.onload = () => {
     activeAttachment = {
       type: 'image',
       dataUrl: reader.result as string,
-      name: file.name
+      name: file.name,
+      blob: file
     };
     mediaAttachmentContent.innerHTML = `
       <img src="${reader.result}" class="w-8 h-8 rounded-lg object-cover border border-slate-300 dark:border-slate-700">
@@ -299,7 +317,8 @@ btnCaptureFrame.addEventListener('click', () => {
     activeAttachment = {
       type: 'image',
       dataUrl,
-      name: fileName
+      name: fileName,
+      blob: dataUrlToBlob(dataUrl)
     };
     mediaAttachmentContent.innerHTML = `
       <img src="${dataUrl}" class="w-8 h-8 rounded-lg object-cover border border-slate-300 dark:border-slate-700">
@@ -310,6 +329,14 @@ btnCaptureFrame.addEventListener('click', () => {
     refreshIcons();
     showToast('Photo captured');
   }
+});
+
+document.addEventListener('paste', (e) => {
+  if (viewTranslate.classList.contains('hidden')) return;
+  const file = Array.from(e.clipboardData?.files ?? []).find((f) => f.type.startsWith('image/'));
+  if (!file) return;
+  e.preventDefault();
+  handleImageFile(file);
 });
 
 cameraGalleryInput.addEventListener('change', () => {
@@ -331,48 +358,126 @@ btnRemoveAttachment.addEventListener('click', () => {
 });
 
 // Microphone Voice Recording
-btnMicRecord.addEventListener('click', async () => {
-  if (isRecording) {
-    if (mediaRecorder && mediaRecorder.state !== 'inactive') {
-      mediaRecorder.stop();
-    }
-    isRecording = false;
-    btnMicRecord.classList.remove('text-red-600', 'bg-red-50', 'animate-pulse');
-    return;
-  }
+function formatRecordingTime(totalSeconds: number): string {
+  const m = Math.floor(totalSeconds / 60).toString().padStart(2, '0');
+  const s = (totalSeconds % 60).toString().padStart(2, '0');
+  return `${m}:${s}`;
+}
+
+async function startVoiceRecording(): Promise<void> {
+  if (isRecording) return;
+  const { locale } = settingsStore.getSettings();
 
   try {
+    if (!navigator.mediaDevices?.getUserMedia) {
+      showToast(getDictionary(locale).toastMicDenied);
+      return;
+    }
+
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    currentAudioStream = stream;
     audioChunks = [];
-    mediaRecorder = new MediaRecorder(stream);
+
+    let mimeType = '';
+    if (typeof MediaRecorder !== 'undefined') {
+      if (MediaRecorder.isTypeSupported('audio/webm;codecs=opus')) {
+        mimeType = 'audio/webm;codecs=opus';
+      } else if (MediaRecorder.isTypeSupported('audio/webm')) {
+        mimeType = 'audio/webm';
+      } else if (MediaRecorder.isTypeSupported('audio/mp4')) {
+        mimeType = 'audio/mp4';
+      }
+    }
+
+    mediaRecorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
 
     mediaRecorder.ondataavailable = (event) => {
-      if (event.data.size > 0) audioChunks.push(event.data);
+      if (event.data && event.data.size > 0) {
+        audioChunks.push(event.data);
+      }
     };
 
+    recordingSeconds = 0;
+    recordingTimer.textContent = '00:00';
+    if (recordingTimerInterval) clearInterval(recordingTimerInterval);
+    recordingTimerInterval = window.setInterval(() => {
+      recordingSeconds += 1;
+      recordingTimer.textContent = formatRecordingTime(recordingSeconds);
+    }, 1000);
+
+    recordingBar.classList.remove('hidden');
+    btnMicRecord.classList.add('text-red-600', 'bg-red-50');
+    isRecording = true;
+    mediaRecorder.start(250);
+  } catch (err) {
+    console.error('Microphone access denied:', err);
+    showToast(getDictionary(locale).toastMicDenied);
+  }
+}
+
+function stopVoiceRecording(save = true): void {
+  if (recordingTimerInterval) {
+    clearInterval(recordingTimerInterval);
+    recordingTimerInterval = null;
+  }
+
+  isRecording = false;
+  recordingBar.classList.add('hidden');
+  btnMicRecord.classList.remove('text-red-600', 'bg-red-50');
+
+  if (!mediaRecorder) return;
+
+  if (save) {
     mediaRecorder.onstop = () => {
-      const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
+      const recordedType = mediaRecorder?.mimeType || 'audio/webm';
+      const audioBlob = new Blob(audioChunks, { type: recordedType });
       const audioUrl = URL.createObjectURL(audioBlob);
       activeAttachment = {
         type: 'audio',
         dataUrl: audioUrl,
-        name: 'Voice recording'
+        name: `Voice_${new Date().toISOString().slice(11, 19).replace(/:/g, '-')}`,
+        blob: audioBlob
       };
       mediaAttachmentContent.innerHTML = `
-        <i data-lucide="mic" class="w-4 h-4 text-red-500"></i>
+        <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-lg bg-red-100 dark:bg-red-950/60 text-red-700 dark:text-red-300 font-semibold text-xs">
+          <i data-lucide="mic" class="w-3.5 h-3.5"></i> Audio
+        </span>
         <audio src="${audioUrl}" controls class="h-7 max-w-[200px]"></audio>
       `;
       mediaAttachmentPreview.classList.remove('hidden');
       refreshIcons();
-      stream.getTracks().forEach((track) => track.stop());
+      const { locale } = settingsStore.getSettings();
+      showToast(getDictionary(locale).toastAudioAttached);
     };
-
-    mediaRecorder.start();
-    isRecording = true;
-    btnMicRecord.classList.add('text-red-600', 'bg-red-50', 'animate-pulse');
-  } catch (err) {
-    console.error('Microphone access denied:', err);
+  } else {
+    mediaRecorder.onstop = null;
+    audioChunks = [];
   }
+
+  if (mediaRecorder.state !== 'inactive') {
+    mediaRecorder.stop();
+  }
+
+  if (currentAudioStream) {
+    currentAudioStream.getTracks().forEach((track) => track.stop());
+    currentAudioStream = null;
+  }
+}
+
+btnMicRecord.addEventListener('click', () => {
+  if (isRecording) {
+    stopVoiceRecording(true);
+  } else {
+    startVoiceRecording();
+  }
+});
+
+btnStopRecording.addEventListener('click', () => {
+  stopVoiceRecording(true);
+});
+
+btnCancelRecording.addEventListener('click', () => {
+  stopVoiceRecording(false);
 });
 
 btnPlaySourceTts.addEventListener('click', () => {
@@ -410,6 +515,12 @@ btnCopyTranslation.addEventListener('click', async () => {
   }
 });
 
+function setInferenceBusy(busy: boolean): void {
+  inferenceIndicator.classList.toggle('hidden', !busy);
+  const icon = btnTranslate.querySelector('svg, i');
+  icon?.classList.toggle('infer-spin', busy);
+}
+
 async function runTranslation(): Promise<void> {
   const text = inputSourceText.value.trim();
   if (!text && !activeAttachment) return;
@@ -421,6 +532,7 @@ async function runTranslation(): Promise<void> {
 
   outputTranslatedText.textContent = '';
   btnTranslate.setAttribute('disabled', 'true');
+  setInferenceBusy(true);
 
   try {
     if (!modelStore.getIsReady()) {
@@ -435,13 +547,34 @@ async function runTranslation(): Promise<void> {
     const prompt = buildTranslationPrompt({
       sourceLang: sourceLang.name,
       targetLang: targetLang.name,
-      text: text || 'Translate attached media',
+      text: text || (activeAttachment?.type === 'audio'
+        ? '(Transcribe and translate the attached audio.)'
+        : activeAttachment?.type === 'image'
+          ? '(Translate all text visible in the attached image.)'
+          : ''),
       systemPrompt
     });
 
-    const translatedResult = await modelStore.translateStreaming(prompt, (chunk) => {
-      outputTranslatedText.textContent += chunk;
-    });
+    let media: MediaInput | undefined;
+    if (activeAttachment) {
+      media = {
+        type: activeAttachment.type,
+        data:
+          activeAttachment.type === 'audio'
+            ? await toWav(activeAttachment.blob)
+            : await toSupportedImage(activeAttachment.blob)
+      };
+    }
+
+    if (media) console.info(`Sending ${media.type}: ${media.data.type}, ${media.data.size} bytes`);
+    const translatedResult = await modelStore.translateStreaming(
+      prompt,
+      (chunk) => {
+        inferenceIndicator.classList.add('hidden');
+        outputTranslatedText.textContent += chunk;
+      },
+      media
+    );
 
     const record: TranslationRecord = {
       id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
@@ -458,9 +591,11 @@ async function runTranslation(): Promise<void> {
     showToast(dict.toastTranslationSaved);
   } catch (err: unknown) {
     const error = err as Error;
+    console.error('Translation failed:', err);
     outputTranslatedText.textContent = `${getDictionary(locale).errTranslation} (${error.message || error})`;
   } finally {
     btnTranslate.removeAttribute('disabled');
+    setInferenceBusy(false);
   }
 }
 
@@ -675,6 +810,7 @@ navTabSettings.addEventListener('click', () => switchTab('settings'));
 
 // App Bootstrapping
 window.addEventListener('DOMContentLoaded', async () => {
+  labelAppVersion.textContent = `Omnitrans ${__APP_VERSION__}`;
   applyTheme();
   applyI18n();
   populateLanguageSelectors();

@@ -3,7 +3,8 @@ import {
   SamplerType,
   resolveModel,
   Backend,
-  type Conversation
+  type Conversation,
+  type ContentPart
 } from '@litert-lm/core';
 
 export const DEFAULT_MODEL_PATH = 'hf://litert-community/gemma-4-E2B-it-litert-lm';
@@ -18,6 +19,11 @@ export interface ModelProgressInfo {
   speed: number;
   etaSeconds: number;
   message: string;
+}
+
+export interface MediaInput {
+  type: 'image' | 'audio';
+  data: Blob;
 }
 
 export type ProgressListener = (info: ModelProgressInfo) => void;
@@ -320,8 +326,11 @@ export class ModelStore {
 
     this.engine = await Engine.create({
       model: modelSource,
+      visionBackend: Backend.GPU,
+      audioBackend: Backend.CPU,
       mainExecutorSettings: {
-        maxNumTokens: 4096
+        maxNumTokens: 4096,
+        maxNumImages: 1
       },
       benchmarkEnabled: true
     });
@@ -364,7 +373,8 @@ export class ModelStore {
 
   async translateStreaming(
     prompt: string,
-    onChunk: (textChunk: string) => void
+    onChunk: (textChunk: string) => void,
+    media?: MediaInput
   ): Promise<string> {
     if (!this.conversation) {
       throw new Error('Inference engine is not initialized.');
@@ -377,7 +387,16 @@ export class ModelStore {
     let fullText = '';
 
     try {
-      const stream = this.conversation.sendMessageStreaming(prompt);
+      const message = media
+        ? {
+            role: 'user' as const,
+            content: [
+              { type: media.type, data: media.data },
+              { type: 'text', text: prompt }
+            ] as ContentPart[]
+          }
+        : prompt;
+      const stream = this.conversation.sendMessageStreaming(message);
       for await (const chunk of stream) {
         let textDelta = '';
         if (Array.isArray(chunk.content)) {

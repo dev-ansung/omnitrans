@@ -24,6 +24,7 @@ test('SettingsStore initializes with default settings: thinking is disabled by d
   assert.equal(settings.theme, 'light');
   assert.equal(settings.locale, 'en');
   assert.equal(settings.defaultModel, 'e2b');
+  assert.ok(settings.systemPrompt.includes('translator'));
 });
 
 test('SettingsStore manages recent languages by promoting to front and allowing removal', () => {
@@ -43,4 +44,15 @@ test('SettingsStore manages recent languages by promoting to front and allowing 
   recents = store.getSettings().recentLanguages;
   assert.ok(!recents.includes('ja'));
   assert.equal(recents[0], 'es');
+});
+
+test('SettingsStore allows customizing and persisting custom system prompt', () => {
+  const storage = new MemoryStorage();
+  const store = new SettingsStore(storage as unknown as Storage);
+
+  store.setSystemPrompt('Translate casually like a friend texting.');
+  assert.equal(store.getSettings().systemPrompt, 'Translate casually like a friend texting.');
+
+  const reloadedStore = new SettingsStore(storage as unknown as Storage);
+  assert.equal(reloadedStore.getSettings().systemPrompt, 'Translate casually like a friend texting.');
 });

@@ -27,10 +27,12 @@ export interface AppSettings {
   temperature: number;
   maxOutputTokens: number;
   recentLanguages: string[];
+  systemPrompt: string;
 }
 
 export interface PromptContext {
   sourceLang: string;
   targetLang: string;
   text: string;
+  systemPrompt?: string;
 }

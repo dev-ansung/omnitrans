@@ -9,7 +9,8 @@ const DEFAULT_SETTINGS: AppSettings = {
   defaultModel: 'e2b',
   temperature: 0.7,
   maxOutputTokens: 1024,
-  recentLanguages: ['en', 'zh-TW', 'ja', 'es']
+  recentLanguages: ['en', 'zh-TW', 'ja', 'es'],
+  systemPrompt: 'You are an expert translator. Translate the text directly from {source} to {target}. Output only the translation.'
 };
 
 export class SettingsStore {
@@ -65,6 +66,10 @@ export class SettingsStore {
 
   setEnableThinking(enableThinking: boolean): void {
     this.updateSettings({ enableThinking });
+  }
+
+  setSystemPrompt(systemPrompt: string): void {
+    this.updateSettings({ systemPrompt });
   }
 
   addRecentLanguage(code: string): void {

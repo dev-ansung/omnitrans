@@ -13,10 +13,14 @@ const historyStore = new HistoryStore();
 const modelStore = new ModelStore();
 const ttsService = new TtsService();
 
+const toastContainer = document.getElementById('toastContainer')!;
 let activeAttachment: { type: 'image' | 'audio'; dataUrl: string; name: string } | null = null;
 let mediaRecorder: MediaRecorder | null = null;
 let audioChunks: Blob[] = [];
 let isRecording = false;
+
+let cameraStream: MediaStream | null = null;
+let facingMode: 'user' | 'environment' = 'environment';
 
 // DOM Elements
 const viewTranslate = document.getElementById('viewTranslate')!;
@@ -32,7 +36,16 @@ const btnSwapLanguages = document.getElementById('btnSwapLanguages')!;
 const recentLanguagePills = document.getElementById('recentLanguagePills')!;
 
 const inputSourceText = document.getElementById('inputSourceText') as HTMLTextAreaElement;
+const btnOpenCamera = document.getElementById('btnOpenCamera')!;
 const cameraFileInput = document.getElementById('cameraFileInput') as HTMLInputElement;
+const cameraModal = document.getElementById('cameraModal')!;
+const cameraVideo = document.getElementById('cameraVideo') as HTMLVideoElement;
+const cameraCanvas = document.getElementById('cameraCanvas') as HTMLCanvasElement;
+const btnCloseCamera = document.getElementById('btnCloseCamera')!;
+const btnCaptureFrame = document.getElementById('btnCaptureFrame')!;
+const btnFlipCamera = document.getElementById('btnFlipCamera')!;
+const cameraGalleryInput = document.getElementById('cameraGalleryInput') as HTMLInputElement;
+
 const btnMicRecord = document.getElementById('btnMicRecord')!;
 const btnPlaySourceTts = document.getElementById('btnPlaySourceTts')!;
 const btnTranslate = document.getElementById('btnTranslate')!;
@@ -62,7 +75,26 @@ const toggleTheme = document.getElementById('toggleTheme') as HTMLInputElement;
 const selectUiLanguage = document.getElementById('selectUiLanguage') as HTMLSelectElement;
 const labelStoragePersistence = document.getElementById('labelStoragePersistence')!;
 const btnRequestPersist = document.getElementById('btnRequestPersist')!;
+const inputSystemPrompt = document.getElementById('inputSystemPrompt') as HTMLTextAreaElement;
+const btnSaveSystemPrompt = document.getElementById('btnSaveSystemPrompt')!;
 const textTtsReady = document.getElementById('textTtsReady')!;
+
+export function showToast(message: string, durationMs = 2800): void {
+  const toast = document.createElement('div');
+  toast.className =
+    'bg-slate-900/90 text-white dark:bg-white/95 dark:text-slate-900 px-3.5 py-2 rounded-xl text-xs font-semibold shadow-lg backdrop-blur flex items-center gap-2 transform transition-all duration-200 -translate-y-2 opacity-0 select-none';
+  toast.innerHTML = `<span>${message}</span>`;
+  toastContainer.appendChild(toast);
+
+  requestAnimationFrame(() => {
+    toast.classList.remove('-translate-y-2', 'opacity-0');
+  });
+
+  setTimeout(() => {
+    toast.classList.add('-translate-y-2', 'opacity-0');
+    setTimeout(() => toast.remove(), 250);
+  }, durationMs);
+}
 
 function refreshIcons(): void {
   createIcons({ icons });
@@ -191,11 +223,8 @@ selectTargetLang.addEventListener('change', () => {
   renderRecentPills();
 });
 
-// Camera / File Input
-cameraFileInput.addEventListener('change', () => {
-  const file = cameraFileInput.files?.[0];
-  if (!file) return;
-
+// Camera & Image Attachment
+function handleImageFile(file: File): void {
   const reader = new FileReader();
   reader.onload = () => {
     activeAttachment = {
@@ -208,14 +237,95 @@ cameraFileInput.addEventListener('change', () => {
       <span class="text-xs text-slate-600 dark:text-slate-300 truncate max-w-[180px]">${file.name}</span>
     `;
     mediaAttachmentPreview.classList.remove('hidden');
+    stopCamera();
     refreshIcons();
+    showToast('Image attached');
   };
   reader.readAsDataURL(file);
+}
+
+async function startCamera(): Promise<void> {
+  stopCamera();
+  try {
+    if (!navigator.mediaDevices?.getUserMedia) {
+      throw new Error('getUserMedia not supported');
+    }
+    cameraStream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: { ideal: facingMode } },
+      audio: false
+    });
+    cameraVideo.srcObject = cameraStream;
+    cameraModal.classList.remove('hidden');
+    refreshIcons();
+  } catch (err) {
+    console.warn('Camera stream error, falling back to file picker:', err);
+    const { locale } = settingsStore.getSettings();
+    showToast(getDictionary(locale).toastCameraUnavailable);
+    cameraFileInput.click();
+  }
+}
+
+function stopCamera(): void {
+  if (cameraStream) {
+    cameraStream.getTracks().forEach((track) => track.stop());
+    cameraStream = null;
+  }
+  cameraVideo.srcObject = null;
+  cameraModal.classList.add('hidden');
+}
+
+btnOpenCamera.addEventListener('click', () => {
+  startCamera();
+});
+
+btnCloseCamera.addEventListener('click', () => {
+  stopCamera();
+});
+
+btnFlipCamera.addEventListener('click', async () => {
+  facingMode = facingMode === 'environment' ? 'user' : 'environment';
+  await startCamera();
+});
+
+btnCaptureFrame.addEventListener('click', () => {
+  if (!cameraVideo.videoWidth || !cameraVideo.videoHeight) return;
+  cameraCanvas.width = cameraVideo.videoWidth;
+  cameraCanvas.height = cameraVideo.videoHeight;
+  const ctx = cameraCanvas.getContext('2d');
+  if (ctx) {
+    ctx.drawImage(cameraVideo, 0, 0, cameraCanvas.width, cameraCanvas.height);
+    const dataUrl = cameraCanvas.toDataURL('image/jpeg', 0.85);
+    const fileName = `Snapshot_${new Date().toISOString().slice(11, 19).replace(/:/g, '-')}.jpg`;
+    activeAttachment = {
+      type: 'image',
+      dataUrl,
+      name: fileName
+    };
+    mediaAttachmentContent.innerHTML = `
+      <img src="${dataUrl}" class="w-8 h-8 rounded-lg object-cover border border-slate-300 dark:border-slate-700">
+      <span class="text-xs text-slate-600 dark:text-slate-300 truncate max-w-[180px]">${fileName}</span>
+    `;
+    mediaAttachmentPreview.classList.remove('hidden');
+    stopCamera();
+    refreshIcons();
+    showToast('Photo captured');
+  }
+});
+
+cameraGalleryInput.addEventListener('change', () => {
+  const file = cameraGalleryInput.files?.[0];
+  if (file) handleImageFile(file);
+});
+
+cameraFileInput.addEventListener('change', () => {
+  const file = cameraFileInput.files?.[0];
+  if (file) handleImageFile(file);
 });
 
 btnRemoveAttachment.addEventListener('click', () => {
   activeAttachment = null;
   cameraFileInput.value = '';
+  cameraGalleryInput.value = '';
   mediaAttachmentPreview.classList.add('hidden');
   mediaAttachmentContent.innerHTML = '';
 });
@@ -287,6 +397,7 @@ btnCopyTranslation.addEventListener('click', async () => {
     await navigator.clipboard.writeText(text);
     const { locale } = settingsStore.getSettings();
     const toast = getDictionary(locale).copiedToast;
+    showToast(toast);
     const originalText = btnCopyTranslation.querySelector('span')?.textContent;
     if (btnCopyTranslation.querySelector('span')) {
       btnCopyTranslation.querySelector('span')!.textContent = toast;
@@ -305,13 +416,15 @@ async function runTranslation(): Promise<void> {
 
   const sourceLang = getLanguageByCode(selectSourceLang.value);
   const targetLang = getLanguageByCode(selectTargetLang.value);
-  const { enableThinking, temperature, maxOutputTokens, locale } = settingsStore.getSettings();
+  const { enableThinking, temperature, maxOutputTokens, systemPrompt, locale } = settingsStore.getSettings();
+  const dict = getDictionary(locale);
 
   outputTranslatedText.textContent = '';
   btnTranslate.setAttribute('disabled', 'true');
 
   try {
     if (!modelStore.getIsReady()) {
+      showToast(dict.toastModelLoading);
       await modelStore.loadEngine({
         enableThinking,
         temperature,
@@ -322,7 +435,8 @@ async function runTranslation(): Promise<void> {
     const prompt = buildTranslationPrompt({
       sourceLang: sourceLang.name,
       targetLang: targetLang.name,
-      text: text || 'Translate attached media'
+      text: text || 'Translate attached media',
+      systemPrompt
     });
 
     const translatedResult = await modelStore.translateStreaming(prompt, (chunk) => {
@@ -341,6 +455,7 @@ async function runTranslation(): Promise<void> {
     };
 
     await historyStore.addRecord(record);
+    showToast(dict.toastTranslationSaved);
   } catch (err: unknown) {
     const error = err as Error;
     outputTranslatedText.textContent = `${getDictionary(locale).errTranslation} (${error.message || error})`;
@@ -443,10 +558,11 @@ btnClearHistory.addEventListener('click', async () => {
 async function updateSettingsView(): Promise<void> {
   const isInstalled = await modelStore.checkInstallation();
   const isReady = modelStore.getIsReady();
-  const { locale, enableThinking } = settingsStore.getSettings();
+  const { locale, enableThinking, systemPrompt } = settingsStore.getSettings();
   const dict = getDictionary(locale);
 
   toggleThinking.checked = enableThinking;
+  inputSystemPrompt.value = systemPrompt;
 
   if (isReady) {
     badgeE2B.className = 'w-2 h-2 rounded-full bg-emerald-500';
@@ -477,8 +593,15 @@ async function updateSettingsView(): Promise<void> {
   textTtsReady.textContent = tts.ready ? dict.ttsReadyBadge : dict.ttsUnavailableBadge;
 }
 
+btnSaveSystemPrompt.addEventListener('click', () => {
+  settingsStore.setSystemPrompt(inputSystemPrompt.value);
+  const { locale } = settingsStore.getSettings();
+  showToast(getDictionary(locale).toastPromptSaved);
+});
+
 btnDownloadE2B.addEventListener('click', async () => {
-  const { enableThinking, temperature, maxOutputTokens } = settingsStore.getSettings();
+  const { enableThinking, temperature, maxOutputTokens, locale } = settingsStore.getSettings();
+  showToast(getDictionary(locale).toastModelLoading);
   try {
     await modelStore.loadEngine({
       enableThinking,
@@ -486,6 +609,7 @@ btnDownloadE2B.addEventListener('click', async () => {
       maxOutputTokens
     });
     updateSettingsView();
+    showToast(getDictionary(locale).toastModelReady);
   } catch (err) {
     console.error('Failed to load engine:', err);
   }
@@ -498,13 +622,20 @@ btnDeleteE2B.addEventListener('click', async () => {
   }
 });
 
+let hasShownDownloadingToast = false;
 modelStore.onProgress((info) => {
   if (info.status === 'downloading') {
+    if (!hasShownDownloadingToast) {
+      hasShownDownloadingToast = true;
+      const { locale } = settingsStore.getSettings();
+      showToast(getDictionary(locale).toastModelDownloading);
+    }
     e2bProgressBarContainer.classList.remove('hidden');
     e2bProgressBar.style.width = `${info.percent}%`;
     e2bProgressText.textContent = `${info.percent.toFixed(0)}%`;
     e2bSpeedText.textContent = `${(info.speed / (1024 * 1024)).toFixed(1)} MB/s`;
   } else if (info.status === 'ready' || info.status === 'idle') {
+    hasShownDownloadingToast = false;
     e2bProgressBarContainer.classList.add('hidden');
     updateSettingsView();
   }
@@ -529,7 +660,11 @@ selectUiLanguage.addEventListener('change', () => {
 
 btnRequestPersist.addEventListener('click', async () => {
   if (navigator.storage && navigator.storage.persist) {
-    await navigator.storage.persist();
+    const granted = await navigator.storage.persist();
+    const { locale } = settingsStore.getSettings();
+    if (granted) {
+      showToast(getDictionary(locale).toastStoragePersistSuccess);
+    }
     updateSettingsView();
   }
 });

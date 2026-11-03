@@ -13,6 +13,9 @@
   <script src="https://unpkg.com/lucide@latest"></script>
 </head>
 <body class="bg-slate-100 text-slate-800 dark:bg-slate-950 dark:text-slate-100 min-h-screen flex flex-col font-sans antialiased transition-colors duration-200 select-none">
+  <!-- Toast Notification Container -->
+  <div id="toastContainer" class="fixed top-4 left-1/2 -translate-x-1/2 z-50 pointer-events-none flex flex-col items-center gap-2 max-w-sm w-full px-4"></div>
+
   <div class="max-w-md w-full mx-auto min-h-screen flex flex-col bg-white dark:bg-slate-900 border-x border-slate-200 dark:border-slate-800 shadow-xl relative pb-20">
     
     <!-- TRANSLATE TAB VIEW -->
@@ -62,18 +65,15 @@
 
         <!-- Input Tool Bar -->
         <div class="flex items-center justify-between pt-1 border-t border-slate-200/60 dark:border-slate-700/50">
-          <div class="flex items-center gap-1">
-            <button id="btnInputText" class="w-8 h-8 rounded-lg hover:bg-slate-200/60 dark:hover:bg-slate-700/60 text-slate-500 flex items-center justify-center transition">
-              <i data-lucide="type" class="w-4 h-4"></i>
-            </button>
-            <label class="w-8 h-8 rounded-lg hover:bg-slate-200/60 dark:hover:bg-slate-700/60 text-slate-500 flex items-center justify-center transition cursor-pointer">
+          <div class="flex items-center gap-1.5">
+            <button id="btnOpenCamera" type="button" class="w-8 h-8 rounded-lg hover:bg-slate-200/60 dark:hover:bg-slate-700/60 text-slate-500 flex items-center justify-center transition" title="Open camera">
               <i data-lucide="camera" class="w-4 h-4"></i>
-              <input type="file" id="cameraFileInput" accept="image/*" class="hidden">
-            </label>
-            <button id="btnPlaySourceTts" class="w-8 h-8 rounded-lg hover:bg-slate-200/60 dark:hover:bg-slate-700/60 text-slate-500 flex items-center justify-center transition">
+            </button>
+            <input type="file" id="cameraFileInput" accept="image/*" class="hidden">
+            <button id="btnPlaySourceTts" class="w-8 h-8 rounded-lg hover:bg-slate-200/60 dark:hover:bg-slate-700/60 text-slate-500 flex items-center justify-center transition" title="Listen source text">
               <i data-lucide="volume-2" class="w-4 h-4"></i>
             </button>
-            <button id="btnMicRecord" class="w-8 h-8 rounded-lg hover:bg-red-50 text-slate-500 hover:text-red-600 flex items-center justify-center transition">
+            <button id="btnMicRecord" class="w-8 h-8 rounded-lg hover:bg-red-50 text-slate-500 hover:text-red-600 flex items-center justify-center transition" title="Record voice">
               <i data-lucide="mic" class="w-4 h-4"></i>
             </button>
           </div>
@@ -215,6 +215,16 @@
           <span id="labelStoragePersistence" class="text-xs text-slate-500">Storage: Standard</span>
           <button id="btnRequestPersist" class="text-xs font-semibold text-blue-600 hover:text-blue-700" data-i18n="storagePersistBtn">Request Persistent Storage</button>
         </div>
+
+        <!-- Custom System Prompt -->
+        <div class="space-y-1.5 pt-2 border-t border-slate-200/80 dark:border-slate-800">
+          <label for="inputSystemPrompt" class="block text-xs font-semibold uppercase tracking-wider text-slate-400" data-i18n="systemPromptLabel">System Prompt</label>
+          <p class="text-[11px] text-slate-500 dark:text-slate-400 leading-tight" data-i18n="systemPromptHelp">Instructions for the translation engine. Use {source} and {target} placeholders.</p>
+          <textarea id="inputSystemPrompt" rows="3" class="w-full bg-slate-100 dark:bg-slate-800 rounded-xl p-2.5 text-xs text-slate-800 dark:text-slate-100 outline-none border border-transparent focus:border-blue-500 resize-none font-mono"></textarea>
+          <div class="flex justify-end">
+            <button id="btnSaveSystemPrompt" class="px-3.5 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold transition" data-i18n="btnSaveSystemPrompt">Save System Prompt</button>
+          </div>
+        </div>
       </section>
 
       <!-- Default Speech Engine -->
@@ -251,6 +261,37 @@
         <span data-i18n="tabSettings">Settings</span>
       </button>
     </nav>
+  </div>
+
+  <!-- Live Camera Viewfinder Modal -->
+  <div id="cameraModal" class="hidden fixed inset-0 z-50 bg-black flex flex-col justify-between p-4 max-w-md mx-auto">
+    <div class="flex items-center justify-between text-white pt-2 px-1">
+      <div class="flex items-center gap-2">
+        <i data-lucide="camera" class="w-5 h-5 text-blue-400"></i>
+        <span class="text-sm font-semibold tracking-wide">Camera</span>
+      </div>
+      <button id="btnCloseCamera" class="w-8 h-8 rounded-full bg-white/20 hover:bg-white/30 flex items-center justify-center text-white transition">
+        <i data-lucide="x" class="w-5 h-5"></i>
+      </button>
+    </div>
+
+    <div class="relative flex-1 flex items-center justify-center overflow-hidden my-3 rounded-2xl bg-slate-900 border border-white/10">
+      <video id="cameraVideo" autoplay playsinline muted class="w-full h-full object-cover rounded-2xl"></video>
+      <canvas id="cameraCanvas" class="hidden"></canvas>
+    </div>
+
+    <div class="flex items-center justify-around pb-6 pt-2">
+      <label class="w-12 h-12 rounded-full bg-white/20 hover:bg-white/30 flex items-center justify-center text-white cursor-pointer transition" title="Choose from gallery">
+        <i data-lucide="image" class="w-5 h-5"></i>
+        <input type="file" id="cameraGalleryInput" accept="image/*" class="hidden">
+      </label>
+      <button id="btnCaptureFrame" class="w-16 h-16 rounded-full border-4 border-white flex items-center justify-center active:scale-95 transition bg-white/20 hover:bg-white/40" title="Capture photo">
+        <div class="w-11 h-11 rounded-full bg-white"></div>
+      </button>
+      <button id="btnFlipCamera" class="w-12 h-12 rounded-full bg-white/20 hover:bg-white/30 flex items-center justify-center text-white transition" title="Switch camera">
+        <i data-lucide="refresh-cw" class="w-5 h-5"></i>
+      </button>
+    </div>
   </div>
 
   <script type="module" src="./src/main.ts"></script>

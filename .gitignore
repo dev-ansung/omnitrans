@@ -1,0 +1,23 @@
+# Dependencies
+node_modules/
+
+# Build artifacts
+dist/
+build/
+
+# Environment and local storage
+.env
+.env.local
+*.litertlm
+
+# System & Editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Logs & Caches
+*.log
+npm-debug.log*
+.turbo/
+.cache/
